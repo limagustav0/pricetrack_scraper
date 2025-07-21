@@ -9,7 +9,7 @@ async def magalu_scrap(target_url: str, ean: str, marca: str):
     lojas = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)  # Pode tentar headless=True
+        browser = await p.chromium.launch(headless=True)  # Pode tentar headless=True
         context = await browser.new_context(viewport={"width": 800, "height": 600})
         page = await context.new_page()
 

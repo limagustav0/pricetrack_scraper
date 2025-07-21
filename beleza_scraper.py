@@ -9,7 +9,7 @@ async def beleza_na_web_scrap(target_url :str, ean: str, marca:str):
     print(f"[BNW] Iniciando raspagem para: {url}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(viewport={"width":480, "height":300})
         page = await context.new_page()
 

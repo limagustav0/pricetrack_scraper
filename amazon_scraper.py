@@ -24,7 +24,7 @@ async def amazon_scrap(target_url: str, ean:str, marca:str) -> list:
         return lojas
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, )
+        browser = await p.chromium.launch(headless=True, )
         context = await browser.new_context(viewport={"width":480, "height":300})
         page = await context.new_page()
         print("[Amazon] Página criada, carregando cookies e navegando para a URL...")
