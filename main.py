@@ -17,8 +17,8 @@ init()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-API_ENDPOINT = "http://127.0.0.1:8000/api/urls/"
-PRODUCTS_ENDPOINT = "http://127.0.0.1:8000/api/products"
+API_ENDPOINT = "http://201.23.64.234:8000/api/urls/"
+PRODUCTS_ENDPOINT = "http://201.23.64.234:8000/api/products"
 
 async def get_from_api():
     async with httpx.AsyncClient() as client:
