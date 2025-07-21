@@ -1,12 +1,10 @@
-version: '3.8'
+version: "3.9"
 
 services:
-  web:
+  scraper:
     build: .
-    container_name: django_ninja_app
-    ports:
-      - "8000:8000"
+    container_name: pricetrack_scraper
+    restart: unless-stopped
     volumes:
-      - .:/app
-    environment:
-      - DEBUG=1
+      - ./:/app
+    command: python main.py
