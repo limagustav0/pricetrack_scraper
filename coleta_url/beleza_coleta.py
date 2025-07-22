@@ -7,7 +7,8 @@ from pprint import pprint
 
 
 
-API_ENDPOINT = "http://127.0.0.1:8000/api/urls"
+API_ENDPOINT = "http://201.23.64.234:8000/api/urls"
+
 
 async def enviar_para_api(dados):
     async with httpx.AsyncClient() as client:

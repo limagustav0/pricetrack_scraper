@@ -5,7 +5,7 @@ from urllib.parse import urlparse, urlunparse
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from pprint import pprint
 
-API_ENDPOINT = "http://127.0.0.1:8000/api/urls"
+API_ENDPOINT = "http://201.23.64.234:8000/api/urls"
 
 async def enviar_para_api(dados):
     async with httpx.AsyncClient() as client:
@@ -17,7 +17,7 @@ async def enviar_para_api(dados):
         except httpx.RequestError as e:
             print(f"[API] Erro ao conectar com a API: {e}")
 
-async def buscar_produto_amazon(ean, descricao, cliente, is_kit=False, tentativas=7):
+async def buscar_produto_amazon(ean, descricao, cliente, is_kit=False, tentativas=4):
     url_busca = f"https://www.amazon.com.br/s?k={ean}"
 
     for tentativa in range(1, tentativas + 1):
