@@ -7,8 +7,6 @@ from datetime import datetime
 from pprint import pprint
 
 import aiohttp
-from crawl4ai import AsyncWebCrawler
-from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 
@@ -24,7 +22,7 @@ async def amazon_scrap(target_url: str, ean:str, marca:str) -> list:
         return lojas
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, )
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(viewport={"width":480, "height":300})
         page = await context.new_page()
         print("[Amazon] Página criada, carregando cookies e navegando para a URL...")
@@ -215,7 +213,8 @@ async def amazon_scrap(target_url: str, ean:str, marca:str) -> list:
                             'imagem': imagem,
                             'status': 'ativo',
                             "url":target_url,
-                            "ean": ean
+                            "ean": ean,
+                            "marca":marca
                         })
                         print(f"Oferta {i} capturada: {seller_name}, Preço: {preco_final}")
                     except Exception as e:
