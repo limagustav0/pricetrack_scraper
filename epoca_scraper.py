@@ -4,7 +4,6 @@ import re
 from datetime import datetime
 from urllib.parse import unquote, urlparse, parse_qs
 import aiohttp
-from crawl4ai import AsyncWebCrawler
 from playwright.async_api import async_playwright
 from pprint import pprint
 
