@@ -5,7 +5,7 @@ from datetime import datetime
 from urllib.parse import unquote, urlparse, parse_qs
 import aiohttp
 from playwright.async_api import async_playwright
-from pprint import pprint
+
 
 async def epoca_scrap(ean, marca):
     url = f"https://www.epocacosmeticos.com.br/pesquisa?q={ean}"
@@ -131,7 +131,7 @@ async def epoca_scrap(ean, marca):
                     print(f"[Época] Erro: Preço final '0' após {max_retries} tentativas para o produto {idx+1}")
                     continue
 
-                pprint(resultado)
+                print(resultado)
                 lojas.append(resultado)
 
             except Exception as e:

@@ -4,7 +4,7 @@ import os
 import re
 import time
 from datetime import datetime
-from pprint import pprint
+
 
 import aiohttp
 from playwright.async_api import async_playwright
@@ -233,7 +233,7 @@ async def amazon_scrap(target_url: str, ean:str, marca:str) -> list:
     end_time = time.time()
     execution_time = end_time - start_time
     print(f"[Amazon] Tempo de execução: {execution_time:.2f} segundos")
-    pprint(lojas)
+    print(lojas)
     return lojas
 
 

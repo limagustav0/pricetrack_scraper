@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 API_ENDPOINT = "http://201.23.64.234:8000/api/urls/"
-PRODUCTS_ENDPOINT = "http://201.23.64.234:8000/api/products"
+PRODUCTS_ENDPOINT = "http://127.0.0.1:8000/api/products"
 
 async def get_from_api():
     async with httpx.AsyncClient() as client:
@@ -64,7 +64,8 @@ async def post_to_products(products):
                     "imagem": product.get("imagem", "https://via.placeholder.com/150"),
                     "status": product.get("status", "ativo"),
                     "preco_pricing": str(Decimal(str(product["preco_pricing"]))) if product.get("preco_pricing") else None,
-                    "url": product.get("url","-")
+                    "url": product.get("url","-"),
+                    "marca": product.get("marca", "Marca não informada")
                 }
                 # Lidar com possíveis variações nos nomes dos campos
                 if "price" in product and "preco_final" not in product:

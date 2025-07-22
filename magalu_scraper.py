@@ -1,7 +1,6 @@
 import asyncio
 import json
 from datetime import datetime
-from pprint import pprint
 from playwright.async_api import async_playwright, TimeoutError
 
 async def magalu_scrap(target_url: str, ean: str, marca: str):
@@ -102,7 +101,7 @@ async def magalu_scrap(target_url: str, ean: str, marca: str):
 
             print("\nOs 5 primeiros produtos ordenados por preço (mais barato ao mais caro):")
             for produto in primeiros_cinco:
-                pprint(produto)
+                print(produto)
 
         except TimeoutError:
             print("Timeout ao carregar a página ou elementos. Verifique o seletor ou a conexão.")
