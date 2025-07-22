@@ -86,7 +86,7 @@ async def magalu_scrap(target_url: str, ean: str, marca: str):
                         "marketplace": marketplace,
                         "key_loja": key_loja,
                         "key_sku": key_ean,
-                        "marca": marca[:50]  # Trunca para evitar erro de validação
+                        "marca": marca # Trunca para evitar erro de validação
                     }
 
                     lojas.append(resultado)
