@@ -8,10 +8,7 @@ from magalu_scraper import magalu_scrap
 from epoca_scraper import epoca_scrap
 from decimal import Decimal
 import logging
-from colorama import init, Fore, Style
-
-# Inicializa colorama para cores no terminal (necessário para Windows)
-init()
+from datetime import datetime
 
 # Configura o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,25 +20,32 @@ PRODUCTS_ENDPOINT = "http://201.23.64.234:8000/api/products"
 async def get_from_api():
     async with httpx.AsyncClient() as client:
         try:
-            pprint(f"{Fore.CYAN}Enviando requisição GET para: {API_ENDPOINT}{Style.RESET_ALL}")
+            logger.info("========== Iniciando requisição GET para: %s ==========", API_ENDPOINT)
+            print(f"INFO: Enviando requisição GET para: {API_ENDPOINT}")
             response = await client.get(API_ENDPOINT, timeout=10)
-            pprint(f"{Fore.CYAN}Resposta recebida - Status: {response.status_code}{Style.RESET_ALL}")
+            logger.info("Resposta recebida - Status: %s", response.status_code)
+            print(f"INFO: Resposta recebida - Status: {response.status_code}")
             if response.status_code != 200:
-                pprint(f"{Fore.RED}Erro na API: {response.text}{Style.RESET_ALL}")
+                logger.error("Erro na API: %s", response.text)
+                print(f"ERROR: Erro na API: {response.text}")
                 return None
             response_data = response.json()
-            pprint(f"{Fore.CYAN}Dados recebidos:{Style.RESET_ALL}")
+            logger.info("Dados recebidos:")
+            print("INFO: Dados recebidos:")
             pprint(response_data, indent=2)
             if isinstance(response_data, list):
                 return pd.DataFrame(response_data)
             else:
-                pprint(f"{Fore.RED}Resposta não é uma lista: {response_data}{Style.RESET_ALL}")
+                logger.warning("Resposta não é uma lista: %s", response_data)
+                print(f"WARNING: Resposta não é uma lista: {response_data}")
                 return None
         except httpx.RequestError as e:
-            pprint(f"{Fore.RED}Erro ao conectar com a API: {e}{Style.RESET_ALL}")
+            logger.error("Erro ao conectar com a API: %s", e)
+            print(f"ERROR: Erro ao conectar com a API: {e}")
             return None
         except ValueError as e:
-            pprint(f"{Fore.RED}Erro ao processar JSON: {e}{Style.RESET_ALL}")
+            logger.error("Erro ao processar JSON: %s", e)
+            print(f"ERROR: Erro ao processar JSON: {e}")
             return None
 
 async def post_to_products(products):
@@ -64,7 +68,7 @@ async def post_to_products(products):
                     "imagem": product.get("imagem", "https://via.placeholder.com/150"),
                     "status": product.get("status", "ativo"),
                     "preco_pricing": str(Decimal(str(product["preco_pricing"]))) if product.get("preco_pricing") else None,
-                    "url": product.get("url","-"),
+                    "url": product.get("url", "-"),
                     "marca": product.get("marca", "Marca não informada")
                 }
                 # Lidar com possíveis variações nos nomes dos campos
@@ -74,90 +78,126 @@ async def post_to_products(products):
                     product_data["imagem"] = product["image"]
                 payload.append(product_data)
             
-            logger.info(f"Enviando {len(payload)} produtos para {PRODUCTS_ENDPOINT}")
-            pprint(f"{Fore.CYAN}Enviando {len(payload)} produtos para: {PRODUCTS_ENDPOINT}{Style.RESET_ALL}")
+            logger.info("Enviando %s produtos para %s", len(payload), PRODUCTS_ENDPOINT)
+            print(f"INFO: Enviando {len(payload)} produtos para: {PRODUCTS_ENDPOINT}")
             response = await client.post(PRODUCTS_ENDPOINT, json=payload, timeout=10)
-            pprint(f"{Fore.CYAN}Resposta POST - Status: {response.status_code}{Style.RESET_ALL}")
+            logger.info("Resposta POST - Status: %s", response.status_code)
+            print(f"INFO: Resposta POST - Status: {response.status_code}")
             if response.status_code == 200:
-                pprint(f"{Fore.GREEN}Produtos enviados com sucesso: {response.json()}{Style.RESET_ALL}")
+                logger.info("Produtos enviados com sucesso: %s", response.json())
+                print(f"SUCCESS: Produtos enviados com sucesso: {response.json()}")
                 return response.json()
             else:
-                logger.error(f"Erro ao enviar produtos: {response.text}")
-                pprint(f"{Fore.RED}Erro ao enviar produtos: {response.text}{Style.RESET_ALL}")
+                logger.error("Erro ao enviar produtos: %s", response.text)
+                print(f"ERROR: Erro ao enviar produtos: {response.text}")
                 return None
         except httpx.RequestError as e:
-            logger.error(f"Erro ao conectar com a API: {e}")
-            pprint(f"{Fore.RED}Erro ao conectar com a API: {e}{Style.RESET_ALL}")
+            logger.error("Erro ao conectar com a API: %s", e)
+            print(f"ERROR: Erro ao conectar com a API: {e}")
             return None
         except ValueError as e:
-            logger.error(f"Erro ao processar JSON: {e}")
-            pprint(f"{Fore.RED}Erro ao processar JSON: {e}{Style.RESET_ALL}")
+            logger.error("Erro ao processar JSON: %s", e)
+            print(f"ERROR: Erro ao processar JSON: {e}")
             return None
 
 async def main():
-    pprint(f"{Fore.CYAN}Iniciando requisição GET para: {API_ENDPOINT}{Style.RESET_ALL}")
+    # Contador para rastrear o número de raspagens
+    total_raspagens = 0
+    raspagens_concluidas = 0
+    
+    logger.info("========== Início da Execução - %s ==========", datetime.now().strftime("%Y-%m-%d %H:%M:%S %z"))
+    print("INFO: Iniciando requisição GET para:", API_ENDPOINT)
+
     df = await get_from_api()
-    pprint(f"{Fore.CYAN}\nResultado do DataFrame:{Style.RESET_ALL}")
+    logger.info("Resultado do DataFrame:")
+    print("\nINFO: Resultado do DataFrame:")
     if df is None or df.empty:
-        pprint(f"{Fore.RED}Nenhum dado válido retornado ou DataFrame vazio.{Style.RESET_ALL}")
+        logger.warning("Nenhum dado válido retornado ou DataFrame vazio.")
+        print("WARNING: Nenhum dado válido retornado ou DataFrame vazio.")
         return None
 
-    pprint(f"{Fore.CYAN}Colunas do DataFrame: {df.columns.tolist()}{Style.RESET_ALL}")
-    pprint(df)
+    logger.info("Colunas do DataFrame: %s", df.columns.tolist())
+    print("INFO: Colunas do DataFrame:", df.columns.tolist())
+    print(df)
 
-    # Validate required columns
+    # Validação das colunas necessárias
     required_columns = ['url', 'ean', 'brand']
     if not all(col in df.columns for col in required_columns):
-        pprint(f"{Fore.RED}DataFrame não contém todas as colunas necessárias: {required_columns}{Style.RESET_ALL}")
+        logger.error("DataFrame não contém todas as colunas necessárias: %s", required_columns)
+        print(f"ERROR: DataFrame não contém todas as colunas necessárias: {required_columns}")
         return None
 
-    # Process rows and call appropriate scraper based on URL
+    # Total de raspagens a serem feitas
+    total_raspagens = len(df)
+    
+    # Processa as linhas e chama o scraper apropriado baseado na URL
     for index, row in df.iterrows():
-        pprint(f"{Fore.CYAN}Processando EAN: {row['ean']}{Style.RESET_ALL}")
+        raspagens_concluidas += 1
+        logger.info("========== Processando EAN: %s ==========", row['ean'])
+        print(f"INFO: Processando EAN: {row['ean']}")
         try:
             result = await epoca_scrap(row['ean'], row['brand'])
             if result:
-                pprint(f"{Fore.GREEN}Resultado epoca_scrap: {result}{Style.RESET_ALL}")
+                logger.info("Resultado de epoca_scrap: %s", result)
+                print(f"SUCCESS: Resultado de epoca_scrap: {result}")
                 await post_to_products(result)
             else:
-                pprint(f"{Fore.RED}Nenhum resultado retornado por epoca_scrap para EAN: {row['ean']}{Style.RESET_ALL}")
+                logger.warning("Nenhum resultado retornado por epoca_scrap para EAN: %s", row['ean'])
+                print(f"WARNING: Nenhum resultado retornado por epoca_scrap para EAN: {row['ean']}")
         except Exception as e:
-            pprint(f"{Fore.RED}Erro em epoca_scrap para EAN {row['ean']}: {e}{Style.RESET_ALL}")
+            logger.error("Erro em epoca_scrap para EAN %s: %s", row['ean'], e)
+            print(f"ERROR: Erro em epoca_scrap para EAN {row['ean']}: {e}")
+
+        logger.info("Raspagens concluídas: %d de %d", raspagens_concluidas, total_raspagens)
+        print(f"INFO: Raspagens concluídas: {raspagens_concluidas} de {total_raspagens}")
 
         if "amazon" in row['url']:
-            pprint(f"{Fore.CYAN}Executando amazon_scrap para EAN: {row['ean']}{Style.RESET_ALL}")
+            logger.info("Executando amazon_scrap para EAN: %s", row['ean'])
+            print(f"INFO: Executando amazon_scrap para EAN: {row['ean']}")
             try:
                 result = await amazon_scrap(row['url'], row['ean'], row['brand'])
                 if result:
-                    pprint(f"{Fore.GREEN}Resultado amazon_scrap: {result}{Style.RESET_ALL}")
+                    logger.info("Resultado de amazon_scrap: %s", result)
+                    print(f"SUCCESS: Resultado de amazon_scrap: {result}")
                     await post_to_products(result)
                 else:
-                    pprint(f"{Fore.RED}Nenhum resultado retornado por amazon_scrap para EAN: {row['ean']}{Style.RESET_ALL}")
+                    logger.warning("Nenhum resultado retornado por amazon_scrap para EAN: %s", row['ean'])
+                    print(f"WARNING: Nenhum resultado retornado por amazon_scrap para EAN: {row['ean']}")
             except Exception as e:
-                pprint(f"{Fore.RED}Erro em amazon_scrap para EAN {row['ean']}: {e}{Style.RESET_ALL}")
+                logger.error("Erro em amazon_scrap para EAN %s: %s", row['ean'], e)
+                print(f"ERROR: Erro em amazon_scrap para EAN {row['ean']}: {e}")
         elif "belezanaweb" in row['url']:
-            pprint(f"{Fore.CYAN}Executando beleza_na_web_scrap para EAN: {row['ean']}{Style.RESET_ALL}")
+            logger.info("Executando beleza_na_web_scrap para EAN: %s", row['ean'])
+            print(f"INFO: Executando beleza_na_web_scrap para EAN: {row['ean']}")
             try:
                 result = await beleza_na_web_scrap(row['url'], row['ean'], row['brand'])
                 if result:
-                    pprint(f"{Fore.GREEN}Resultado beleza_na_web_scrap: {result}{Style.RESET_ALL}")
+                    logger.info("Resultado de beleza_na_web_scrap: %s", result)
+                    print(f"SUCCESS: Resultado de beleza_na_web_scrap: {result}")
                     await post_to_products(result)
                 else:
-                    pprint(f"{Fore.RED}Nenhum resultado retornado por beleza_na_web_scrap para EAN: {row['ean']}{Style.RESET_ALL}")
+                    logger.warning("Nenhum resultado retornado por beleza_na_web_scrap para EAN: %s", row['ean'])
+                    print(f"WARNING: Nenhum resultado retornado por beleza_na_web_scrap para EAN: {row['ean']}")
             except Exception as e:
-                pprint(f"{Fore.RED}Erro em beleza_na_web_scrap para EAN {row['ean']}: {e}{Style.RESET_ALL}")
-        elif "magazineluiza" in row['url']:
-            pprint(f"{Fore.CYAN}Executando magalu_scrap para EAN: {row['ean']}{Style.RESET_ALL}")
-            try:
-                result = await magalu_scrap(row['url'], row['ean'], row['brand'])
-                if result:
-                    pprint(f"{Fore.GREEN}Resultado magalu_scrap: {result}{Style.RESET_ALL}")
-                    await post_to_products(result)
-                else:
-                    pprint(f"{Fore.RED}Nenhum resultado retornado por magalu_scrap para EAN: {row['ean']}{Style.RESET_ALL}")
-            except Exception as e:
-                pprint(f"{Fore.RED}Erro em magalu_scrap para EAN {row['ean']}: {e}{Style.RESET_ALL}")
+                logger.error("Erro em beleza_na_web_scrap para EAN %s: %s", row['ean'], e)
+                print(f"ERROR: Erro em beleza_na_web_scrap para EAN {row['ean']}: {e}")
+        # elif "magazineluiza" in row['url']:
+        #     logger.info("Executando magalu_scrap para EAN: %s", row['ean'])
+        #     print(f"INFO: Executando magalu_scrap para EAN: {row['ean']}")
+        #     try:
+        #         result = await magalu_scrap(row['url'], row['ean'], row['brand'])
+        #         if result:
+        #             logger.info("Resultado de magalu_scrap: %s", result)
+        #             print(f"SUCCESS: Resultado de magalu_scrap: {result}")
+        #             await post_to_products(result)
+        #         else:
+        #             logger.warning("Nenhum resultado retornado por magalu_scrap para EAN: %s", row['ean'])
+        #             print(f"WARNING: Nenhum resultado retornado por magalu_scrap para EAN: {row['ean']}")
+        #     except Exception as e:
+        #         logger.error("Erro em magalu_scrap para EAN %s: %s", row['ean'], e)
+        #         print(f"ERROR: Erro em magalu_scrap para EAN {row['ean']}: {e}")
 
+    logger.info("========== Fim da Execução - %s ==========", datetime.now().strftime("%Y-%m-%d %H:%M:%S %z"))
     return df
 
 if __name__ == "__main__":
