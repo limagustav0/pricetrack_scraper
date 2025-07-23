@@ -144,11 +144,16 @@ async def main():
             return None
 
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-        tasks = [scrape_url(row, semaphore, client) for _, row in df.iterrows()]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = []
+        total_raspagens = len(df)
+        raspagens_concluidas = 0
         
-        total_raspagens = len(tasks)
-        raspagens_concluidas = sum(1 for result in results if result is not None)
+        for _, row in df.iterrows():
+            result = await scrape_url(row, semaphore, client)
+            if result is not None:
+                raspagens_concluidas += 1
+            results.append(result)
+        
         logger.info("Raspagens concluídas: %d de %d", raspagens_concluidas, total_raspagens)
 
     logger.info("Fim da Execução - %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S %z"))
