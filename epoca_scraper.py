@@ -1,163 +1,145 @@
 import asyncio
-import httpx
-import pandas as pd
-from amazon_scraper import amazon_scrap
-from beleza_scraper import beleza_na_web_scrap
-from magalu_scraper import magalu_scrap
-from epoca_scraper import epoca_scrap
-from decimal import Decimal
-import logging
+import json
+import re
 from datetime import datetime
+from urllib.parse import unquote, urlparse, parse_qs
+import aiohttp
+from playwright.async_api import async_playwright
 
-# Configura o logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
-API_ENDPOINT = "http://201.23.64.234:8000/api/urls/"
-PRODUCTS_ENDPOINT = "http://201.23.64.234:8000/api/products"
+async def epoca_scrap(ean, marca):
+    url = f"https://www.epocacosmeticos.com.br/pesquisa?q={ean}"
+    print(f"[Época] Iniciando raspagem para: {url}")
 
-# Limite de concorrência para melhorar a velocidade
-CONCURRENCY_LIMIT = 20
-REQUEST_TIMEOUT = 8
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(viewport={"width":480, "height":300})
+        page = await context.new_page()
 
-async def get_from_api(client):
-    """Obtém dados da API e retorna um DataFrame."""
-    try:
-        logger.info("Iniciando requisição GET para: %s", API_ENDPOINT)
-        response = await client.get(API_ENDPOINT, timeout=REQUEST_TIMEOUT)
-        if response.status_code != 200:
-            logger.error("Erro na API: %s", response.status_code)
-            return None
-        response_data = response.json()
-        if isinstance(response_data, list):
-            return pd.DataFrame(response_data)
-        logger.warning("Resposta não é uma lista")
-        return None
-    except httpx.RequestError as e:
-        logger.error("Erro ao conectar com a API: %s", e)
-        return None
-    except ValueError as e:
-        logger.error("Erro ao processar JSON: %s", e)
-        return None
+        await page.goto(url)
+        await page.wait_for_load_state("domcontentloaded")
+        await page.wait_for_timeout(3000)
 
-async def post_to_products(products, client):
-    """Envia uma lista de produtos para o endpoint POST /products."""
-    try:
-        payload = []
-        for product in products:
-            product_data = {
-                "ean": product["ean"],
-                "sku": product.get("sku", "SKU não encontrado"),
-                "loja": product.get("loja", "-"),
-                "preco_final": str(Decimal(str(product.get("preco_final", 0.00)))),
-                "marketplace": product.get("marketplace", "Desconhecido"),
-                "key_loja": product.get("key_loja", "sem_loja"),
-                "key_sku": product.get("key_sku", f"{product['ean']}_{product.get('loja', 'sem_loja')}"),
-                "descricao": product.get("descricao", "Sem descrição"),
-                "review": float(product.get("review", 0.0)),
-                "imagem": product.get("imagem", "https://via.placeholder.com/150"),
-                "status": product.get("status", "ativo"),
-                "preco_pricing": str(Decimal(str(product["preco_pricing"]))) if product.get("preco_pricing") else None,
-                "url": product.get("url", "-"),
-                "marca": product.get("marca", "Marca não informada")
-            }
-            if "price" in product and "preco_final" not in product:
-                product_data["preco_final"] = str(Decimal(str(product["price"])))
-            if "image" in product and "imagem" not in product:
-                product_data["imagem"] = product["image"]
-            payload.append(product_data)
-        
-        logger.info("Enviando %s produtos para %s", len(payload), PRODUCTS_ENDPOINT)
-        response = await client.post(PRODUCTS_ENDPOINT, json=payload, timeout=REQUEST_TIMEOUT)
-        if response.status_code == 200:
-            logger.info("Produtos enviados com sucesso")
-            return response.json()
-        logger.error("Erro ao enviar produtos: %s", response.status_code)
-        return None
-    except (httpx.RequestError, ValueError) as e:
-        logger.error("Erro ao enviar produtos: %s", e)
-        return None
+        produtos = await page.query_selector_all('div[data-testid="productItemComponent"]')
+        print(f"[Época] {len(produtos)} produtos encontrados.")
 
-async def scrape_url(row, semaphore, client):
-    """Processa uma única linha do DataFrame, executando os scrapers apropriados."""
-    async with semaphore:
-        ean = row['ean']
-        url = row['url']
-        brand = row['brand']
-        
-        # Validação inicial da URL
-        if not url or not isinstance(url, str):
-            logger.warning("URL inválida para EAN %s, ignorando", ean)
-            return None
+        lojas = []
 
-        logger.info("Processando EAN: %s", ean)
-        results = []
-        try:
-            if "amazon" in url.lower():
-                logger.info("Executando amazon_scrap para EAN: %s", ean)
-                amazon_result = await amazon_scrap(url, ean, brand)
-                if amazon_result:
-                    results.extend(amazon_result)
-                    logger.info("Resultados obtidos do Amazon para EAN %s", ean)
-            elif "belezanaweb" in url.lower():
-                # Executa beleza_na_web_scrap e epoca_scrap em paralelo
-                logger.info("Executando beleza_na_web_scrap e epoca_scrap para EAN: %s", ean)
-                beleza_task = beleza_na_web_scrap(url, ean, brand)
-                epoca_task = epoca_scrap(ean, brand)
-                beleza_result, epoca_result = await asyncio.gather(beleza_task, epoca_task, return_exceptions=True)
-                
-                if isinstance(beleza_result, list) and beleza_result:
-                    results.extend(beleza_result)
-                    logger.info("Resultados obtidos do Beleza na Web para EAN %s", ean)
-                elif isinstance(beleza_result, Exception):
-                    logger.error("Erro no beleza_na_web_scrap para EAN %s: %s", ean, beleza_result)
-                
-                if isinstance(epoca_result, list) and epoca_result:
-                    results.extend(epoca_result)
-                    logger.info("Resultados obtidos do Época para EAN %s", ean)
-                elif isinstance(epoca_result, Exception):
-                    logger.error("Erro no epoca_scrap para EAN %s: %s", ean, epoca_result)
+        for idx, produto in enumerate(produtos):
+            try:
+                print(f"[Época] Processando produto {idx+1}/{len(produtos)}")
 
-            if results:
-                logger.info("Enviando %s resultados para EAN %s", len(results), ean)
-                await post_to_products(results, client)
-            else:
-                logger.warning("Nenhum resultado retornado para EAN: %s", ean)
-            return results
-        except Exception as e:
-            logger.error("Erro ao processar EAN %s: %s", ean, e)
-            return None
+                nome_el = await produto.query_selector(".name")
+                nome = (await nome_el.inner_text()).strip() if nome_el else ""
 
-async def main():
-    logger.info("Início da Execução - %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S %z"))
-    
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        df = await get_from_api(client)
-        if df is None or df.empty:
-            logger.warning("Nenhum dado válido retornado ou DataFrame vazio")
-            return None
+                link_el = await produto.query_selector('a[data-content-item="true"]')
+                link = await link_el.get_attribute("href") if link_el else ""
+                if link and not link.startswith("http"):
+                    link = "https://www.epocacosmeticos.com.br" + link
 
-        logger.info("Colunas do DataFrame: %s", df.columns.tolist())
-        required_columns = ['url', 'ean', 'brand']
-        if not all(col in df.columns for col in required_columns):
-            logger.error("DataFrame não contém todas as colunas necessárias: %s", required_columns)
-            return None
+                # Corrigir URL final se for redirecionada por mecanismo externo
+                if "algorecs" in link:
+                    parsed_link = urlparse(link)
+                    query_params = parse_qs(parsed_link.query)
+                    if "ct" in query_params:
+                        decoded_url = unquote(query_params["ct"][0])
+                        link = decoded_url
 
-        semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-        results = []
-        total_raspagens = len(df)
-        raspagens_concluidas = 0
-        
-        for _, row in df.iterrows():
-            result = await scrape_url(row, semaphore, client)
-            if result is not None:
-                raspagens_concluidas += 1
-            results.append(result)
-        
-        logger.info("Raspagens concluídas: %d de %d", raspagens_concluidas, total_raspagens)
+                # Tentar obter os dados com até 3 tentativas se preco_final for '0'
+                max_retries = 3
+                retry_count = 0
+                preco_final = '0'
+                resultado = None
 
-    logger.info("Fim da Execução - %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S %z"))
-    return df
+                # Verificação de EAN antes do loop de retries
+                detail = await context.new_page()
+                await detail.goto(link)
+                await detail.wait_for_load_state("domcontentloaded")
+                await detail.wait_for_timeout(2000)
 
-if __name__ == "__main__":
-    df = asyncio.run(main())
+                ean_html = None
+                ean_el = await detail.query_selector('div.pdp-buybox_referCodeEan__5mCsd')
+                if ean_el:
+                    ean_text = await ean_el.inner_text()
+                    match_ean = re.search(r'Ref:\s*(\d+)', ean_text)
+                    if match_ean:
+                        ean_html = match_ean.group(1)
+                if not ean_html or ean_html != ean:
+                    print(f"[Época] EAN divergente ou não encontrado: {ean_html} (esperado: {ean})")
+                    await detail.close()
+                    continue  # Pula para o próximo produto
+
+                await detail.close()  # Fecha a página inicial antes do loop de retries
+
+                while retry_count < max_retries and preco_final == '0':
+                    if retry_count > 0:
+                        print(f"[Época] Preço final '0' detectado. Tentativa {retry_count + 1}/{max_retries} após 3 segundos.")
+                        await asyncio.sleep(3)
+
+                    detail = await context.new_page()
+                    await detail.goto(link)
+                    await detail.wait_for_load_state("domcontentloaded")
+                    await detail.wait_for_timeout(2000)
+
+                    # JSON-LD Schema
+                    jsonld_el = await detail.query_selector('script#jsonSchema')
+                    json_data = {}
+                    if jsonld_el:
+                        try:
+                            content = await jsonld_el.inner_text()
+                            parsed = json.loads(content)
+                            json_data = parsed[0] if isinstance(parsed, list) else parsed
+                        except Exception:
+                            pass
+
+                    sku = json_data.get("sku", "")
+                    preco_final = str(json_data.get("offers", {}).get("price", ""))
+                    descricao_el = await detail.query_selector('p[data-product-title="true"]')
+                    descricao = (await descricao_el.inner_text()).strip() if descricao_el else json_data.get("description", "")
+                    imagem = json_data.get("image", "")
+                    review = float(json_data.get("aggregateRating", {}).get("ratingValue", 0.0))
+                    loja = json_data.get("offers", {}).get("seller", {}).get("name", "Época Cosméticos")
+
+                    data_hora = datetime.utcnow().isoformat() + "Z"
+                    status = "ativo"
+                    marketplace = "Época Cosméticos"
+                    key_loja = loja.lower().replace(" ", "")
+                    key_sku = f"{key_loja}_{ean}" if sku else None
+                    sku = f"{ean}_{"epoca_cosmeticos"}"
+                    
+                    resultado = {
+                        "ean": ean,
+                        "url": link,
+                        "sku": sku if sku else "SKU não encontrado",
+                        "descricao": descricao,
+                        "loja": loja,
+                        "preco_final": preco_final,
+                        "imagem": imagem,
+                        "review": review,
+                        "data_hora": data_hora,
+                        "status": status,
+                        "marketplace": marketplace,
+                        "key_loja": key_loja,
+                        "key_sku": key_sku,
+                        "marca": marca
+                    }
+
+                    await detail.close()
+                    retry_count += 1
+
+                if preco_final == '0':
+                    print(f"[Época] Erro: Preço final '0' após {max_retries} tentativas para o produto {idx+1}")
+                    continue
+
+                print(resultado)
+                lojas.append(resultado)
+
+            except Exception as e:
+                print(f"[Época] Erro ao processar produto {idx}: {e}")
+
+        await context.close()
+        await browser.close()
+        return lojas
+
+if __name__=="__main__":
+    asyncio.run(epoca_scrap('4064666318356','Wella'))
