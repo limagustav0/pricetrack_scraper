@@ -1,8 +1,7 @@
 import asyncio
 import json
-import re
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError
 import logging
 
@@ -20,7 +19,7 @@ USER_AGENTS = [
 ]
 
 async def magalu_scrap(ean: str, marca: str):
-    """Realiza o scraping de produtos da Magazine Luiza de forma discreta, retornando os 10 primeiros produtos com mais de 10 avaliações na ordem original."""
+    """Realiza o scraping de produtos da Magazine Luiza de forma discreta, retornando todos os produtos encontrados na ordem original."""
     url_busca = f"https://www.magazineluiza.com.br/busca/{ean}"
     lojas = []
 
@@ -110,17 +109,7 @@ async def magalu_scrap(ean: str, marca: str):
             logger.info("[Magalu] Total de produtos encontrados no JSON-LD: %d", len(products))
 
             for idx, product in enumerate(products):
-                if len(lojas) >= 10:  # Limita aos 10 primeiros produtos com mais de 10 avaliações
-                    logger.info("[Magalu] Limite de 10 produtos atingido.")
-                    break
-
                 try:
-                    # Filtra produtos com mais de 10 avaliações
-                    review_count = int(product.get("aggregateRating", {}).get("reviewCount", 0))
-                    if review_count <= 10:
-                        logger.info("[Magalu] Ignorando produto %d: %s (apenas %d avaliações)", idx + 1, product.get('name', 'Nome não encontrado'), review_count)
-                        continue
-
                     # Extrai informações do JSON-LD
                     descricao = product.get("name", "Descrição não encontrada")
                     produto_url = product.get("offers", {}).get("url", "")
@@ -132,16 +121,24 @@ async def magalu_scrap(ean: str, marca: str):
                         preco_final = float('inf')
                     imagem = product.get("image", "")
                     review = float(product.get("aggregateRating", {}).get("ratingValue", 0))
+                    review_count = int(product.get("aggregateRating", {}).get("reviewCount", 0))
                     sku = product.get("sku", "SKU não encontrado")
                     brand = product.get("brand", marca)
 
-                    # Extrai a loja do URL (ex.: /loja/nome-da-loja/)
-                    loja_match = re.search(r"/([^/]+)/p/", produto_url)
-                    loja = loja_match.group(1) if loja_match else "Desconhecido"
+                    try:
+                        product_page = await context.new_page()
+                        await product_page.goto(produto_url, timeout=30000)
+                        await product_page.wait_for_load_state("networkidle", timeout=30000)
+                        loja_element = await product_page.query_selector('label[data-testid="link"]')
+                        loja = await loja_element.inner_text() if loja_element else "Desconhecido"
+                        await product_page.close()
+                    except Exception as e:
+                        logger.warning("[Magalu] Erro ao extrair nome da loja para produto %d: %s", idx + 1, e)
+                        loja = "Desconhecido"
 
                     # Dados auxiliares
                     marketplace = "Magazine Luiza"
-                    data_hora = datetime.utcnow().isoformat() + "Z"
+                    data_hora = datetime.now(timezone.utc).isoformat()
                     status = "ativo"
                     key_loja = loja.lower().replace(" ", "")
                     key_ean = f"{key_loja}_{ean}" if sku else None
@@ -155,6 +152,7 @@ async def magalu_scrap(ean: str, marca: str):
                         "preco_final": preco_final,
                         "imagem": imagem,
                         "review": review,
+                        "review_count": review_count,
                         "data_hora": data_hora,
                         "status": status,
                         "marketplace": marketplace,
@@ -170,10 +168,9 @@ async def magalu_scrap(ean: str, marca: str):
                     logger.error("[Magalu] Erro ao processar produto %d: %s", idx + 1, e)
                     continue
 
-            # Retorna os 10 primeiros produtos na ordem original
-            primeiros_dez = lojas[:10]
-            logger.info("[Magalu] Os 10 primeiros produtos com mais de 10 avaliações (sem ordenação):")
-            for produto in primeiros_dez:
+            # Retorna todos os produtos
+            logger.info("[Magalu] Total de produtos extraídos: %d", len(lojas))
+            for produto in lojas:
                 print(json.dumps(produto, indent=2, ensure_ascii=False))
 
         except TimeoutError as e:
