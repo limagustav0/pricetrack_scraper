@@ -1,71 +1,146 @@
 import asyncio
 import json
+import re
+import random
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError
+import logging
 
-async def magalu_scrap(target_url: str, ean: str, marca: str):
-    url_busca = target_url
+# Configura o logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Lista de User-Agents para rotação
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/127.0.0.0"
+]
+
+async def magalu_scrap(ean: str, marca: str):
+    """Realiza o scraping de produtos da Magazine Luiza de forma discreta, retornando os 10 primeiros produtos com mais de 10 avaliações na ordem original."""
+    url_busca = f"https://www.magazineluiza.com.br/busca/{ean}"
     lojas = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)  # Pode tentar headless=True
-        context = await browser.new_context(viewport={"width": 800, "height": 600})
+        # Lança o navegador em modo headless
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent=random.choice(USER_AGENTS),  # Rotação de User-Agent
+            viewport={"width": 1280, "height": 720},
+            java_script_enabled=True,
+            bypass_csp=True,
+            ignore_https_errors=True,
+            extra_http_headers={
+                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Referer": "https://www.google.com/",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive"
+            }
+        )
+        # Habilitar cookies
+        await context.add_cookies([{
+            "name": "cookieConsent",
+            "value": "true",
+            "domain": ".magazineluiza.com.br",
+            "path": "/"
+        }])
+
         page = await context.new_page()
 
         try:
-            await page.goto(url_busca, timeout=30000)
-            # Aguarda o seletor do bloco ul[data-testid="list"]
-            await page.wait_for_selector('ul[data-testid="list"]', timeout=30000)
-
-            # Seleciona apenas os produtos dentro de ul[data-testid="list"] > li.sc-kaaGRQ
-            produtos = await page.query_selector_all('ul[data-testid="list"] li.sc-kaaGRQ a[data-testid="product-card-container"]')
-
-            # Conta o número total de produtos no bloco
-            print(f"Total de produtos encontrados no bloco ul[data-testid=\"list\"]: {len(produtos)}")
-
-            for idx, produto in enumerate(produtos):
+            logger.info("[Magalu] Acessando a URL de busca: %s", url_busca)
+            # Acessar a página com retry e backoff
+            max_retries = 3
+            for attempt in range(max_retries):
                 try:
-                    # Link do produto
-                    href = await produto.get_attribute("href")
-                    produto_url = f"https://www.magazineluiza.com.br{href}"
+                    await page.goto(url_busca, timeout=30000)
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+                    # Simular comportamento humano: rolagem e espera aleatória
+                    logger.info("[Magalu] Rolando a página para garantir renderização...")
+                    await page.evaluate("window.scrollBy(0, 500)")
+                    await asyncio.sleep(random.uniform(2, 4))  # Delay aleatório
+                    break
+                except TimeoutError as e:
+                    logger.warning("[Magalu] Timeout ao carregar página (tentativa %d/%d): %s", attempt + 1, max_retries, e)
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(random.uniform(2, 5))  # Backoff aleatório
+                    else:
+                        logger.error("[Magalu] Falha após %d tentativas para EAN %s", max_retries, ean)
+                        content = await page.content()
+                        logger.error("[Magalu] Conteúdo HTML da página: %s", content)
+                        await page.screenshot(path='magalu_timeout_screenshot.png', full_page=True)
+                        await context.close()
+                        await browser.close()
+                        return lojas
 
-                    # Abre página de detalhe do produto
-                    detail_page = await context.new_page()
-                    await detail_page.goto(produto_url)
-                    await detail_page.wait_for_load_state("domcontentloaded")
-                    await detail_page.wait_for_timeout(1500)
+            # Simular rolagem adicional para carregar conteúdo dinâmico
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(random.uniform(1, 3))
 
-                    # Descrição do produto
-                    desc_el = await detail_page.query_selector('h1[data-testid="heading-product-title"]')
-                    descricao = (await desc_el.inner_text()).strip() if desc_el else ""
+            # Aguarda o seletor do bloco de resultados
+            logger.info("[Magalu] Aguardando bloco de resultados...")
+            try:
+                await page.wait_for_selector('div[data-testid="product-list"]', state='visible', timeout=30000)
+                logger.info("[Magalu] Bloco de resultados encontrado!")
+            except TimeoutError as e:
+                logger.error("[Magalu] Erro ao aguardar bloco de resultados: %s", e)
+                content = await page.content()
+                logger.error("[Magalu] Conteúdo HTML da página: %s", content)
+                await page.screenshot(path='magalu_error_screenshot.png', full_page=True)
+                await context.close()
+                await browser.close()
+                return lojas
 
-                    # Seller / loja
-                    loja_el = await detail_page.query_selector('label[data-testid="link"]')
-                    loja = (await loja_el.inner_text()).strip() if loja_el else "Desconhecido"
+            # Extrai o JSON-LD da página principal
+            jsonld_el = await page.query_selector('script[data-testid="jsonld-script"]')
+            if not jsonld_el:
+                logger.warning("[Magalu] JSON-LD não encontrado na página.")
+                await context.close()
+                await browser.close()
+                return lojas
 
-                    # Marketplace fixo
-                    marketplace = "Magazine Luiza"
+            jsonld_raw = await jsonld_el.inner_text()
+            jsonld_data = json.loads(jsonld_raw)
+            products = jsonld_data.get("@graph", [])
 
-                    # Dados JSON-LD para preço, sku, imagem, review
-                    jsonld_el = await detail_page.query_selector('script[data-testid="jsonld-script"]')
-                    jsonld = {}
-                    if jsonld_el:
-                        jsonld_raw = await jsonld_el.inner_text()
-                        jsonld = json.loads(jsonld_raw)
+            logger.info("[Magalu] Total de produtos encontrados no JSON-LD: %d", len(products))
 
-                    preco_final = jsonld.get("offers", {}).get("price", "")
+            for idx, product in enumerate(products):
+                if len(lojas) >= 10:  # Limita aos 10 primeiros produtos com mais de 10 avaliações
+                    logger.info("[Magalu] Limite de 10 produtos atingido.")
+                    break
+
+                try:
+                    # Filtra produtos com mais de 10 avaliações
+                    review_count = int(product.get("aggregateRating", {}).get("reviewCount", 0))
+                    if review_count <= 10:
+                        logger.info("[Magalu] Ignorando produto %d: %s (apenas %d avaliações)", idx + 1, product.get('name', 'Nome não encontrado'), review_count)
+                        continue
+
+                    # Extrai informações do JSON-LD
+                    descricao = product.get("name", "Descrição não encontrada")
+                    produto_url = product.get("offers", {}).get("url", "")
+                    preco_final = product.get("offers", {}).get("price", "")
                     try:
-                        preco_final = float(preco_final)  # Converte para float para ordenação
+                        preco_final = float(preco_final)
                     except (ValueError, TypeError):
-                        preco_final = float('inf')  # Define como infinito se não for válido
-                    imagem = jsonld.get("image", "")
-                    try:
-                        review = float(jsonld.get("aggregateRating", {}).get("ratingValue", 0))
-                    except:
-                        review = 0.0
-                    sku = jsonld.get("sku", "")
+                        logger.warning("[Magalu] Preço inválido para produto %d, definindo como infinito", idx + 1)
+                        preco_final = float('inf')
+                    imagem = product.get("image", "")
+                    review = float(product.get("aggregateRating", {}).get("ratingValue", 0))
+                    sku = product.get("sku", "SKU não encontrado")
+                    brand = product.get("brand", marca)
+
+                    # Extrai a loja do URL (ex.: /loja/nome-da-loja/)
+                    loja_match = re.search(r"/([^/]+)/p/", produto_url)
+                    loja = loja_match.group(1) if loja_match else "Desconhecido"
 
                     # Dados auxiliares
+                    marketplace = "Magazine Luiza"
                     data_hora = datetime.utcnow().isoformat() + "Z"
                     status = "ativo"
                     key_loja = loja.lower().replace(" ", "")
@@ -74,7 +149,7 @@ async def magalu_scrap(target_url: str, ean: str, marca: str):
                     resultado = {
                         "ean": ean,
                         "url": produto_url,
-                        "sku": sku if sku else "SKU não encontrado",
+                        "sku": sku,
                         "descricao": descricao,
                         "loja": loja,
                         "preco_final": preco_final,
@@ -85,28 +160,32 @@ async def magalu_scrap(target_url: str, ean: str, marca: str):
                         "marketplace": marketplace,
                         "key_loja": key_loja,
                         "key_sku": key_ean,
-                        "marca": marca # Trunca para evitar erro de validação
+                        "marca": brand
                     }
 
                     lojas.append(resultado)
-                    await detail_page.close()
+                    logger.info("[Magalu] Produto %d extraído: %s", idx + 1, descricao)
 
                 except Exception as e:
-                    print(f"Erro ao processar produto {idx}: {e}")
+                    logger.error("[Magalu] Erro ao processar produto %d: %s", idx + 1, e)
+                    continue
 
-            # Ordena os produtos por preço (do mais barato ao mais caro)
-            lojas_ordenadas = sorted(lojas, key=lambda x: x["preco_final"])
-            # Retorna apenas os 5 primeiros
-            primeiros_cinco = lojas_ordenadas[:5]
+            # Retorna os 10 primeiros produtos na ordem original
+            primeiros_dez = lojas[:10]
+            logger.info("[Magalu] Os 10 primeiros produtos com mais de 10 avaliações (sem ordenação):")
+            for produto in primeiros_dez:
+                print(json.dumps(produto, indent=2, ensure_ascii=False))
 
-            print("\nOs 5 primeiros produtos ordenados por preço (mais barato ao mais caro):")
-            for produto in primeiros_cinco:
-                print(produto)
-
-        except TimeoutError:
-            print("Timeout ao carregar a página ou elementos. Verifique o seletor ou a conexão.")
+        except TimeoutError as e:
+            logger.error("[Magalu] Timeout ao carregar a página ou elementos: %s", e)
+            content = await page.content()
+            logger.error("[Magalu] Conteúdo HTML da página: %s", content)
+            await page.screenshot(path='magalu_timeout_screenshot.png', full_page=True)
         except Exception as e:
-            print(f"Erro geral: {e}")
+            logger.error("[Magalu] Erro geral: %s", e)
+            content = await page.content()
+            logger.error("[Magalu] Conteúdo HTML da página: %s", content)
+            await page.screenshot(path='magalu_error_screenshot.png', full_page=True)
         finally:
             await context.close()
             await browser.close()
@@ -114,4 +193,9 @@ async def magalu_scrap(target_url: str, ean: str, marca: str):
     return lojas
 
 if __name__ == "__main__":
-    asyncio.run(magalu_scrap('https://www.magazineluiza.com.br/busca/4064666318356', '4064666318356', 'Wella Professionals'))
+    async def run_scraper():
+        ean = "4064666318356"
+        marca = "Wella Professionals"
+        results = await magalu_scrap(ean, marca)
+
+    asyncio.run(run_scraper())

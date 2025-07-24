@@ -104,20 +104,30 @@ async def scrape_url(row, semaphore, client):
                 logger.info("Executando beleza_na_web_scrap e epoca_scrap para EAN: %s", ean)
                 beleza_task = beleza_na_web_scrap(url, ean, brand)
                 epoca_task = epoca_scrap(ean, brand)
-                beleza_result, epoca_result = await asyncio.gather(beleza_task, epoca_task, return_exceptions=True)
+                magalu_task = magalu_scrap(ean, brand)
+                beleza_result, epoca_result,magalu_result = await asyncio.gather(beleza_task, epoca_task, magalu_task,return_exceptions=True)
                 
                 if isinstance(beleza_result, list) and beleza_result:
                     results.extend(beleza_result)
                     logger.info("Resultados obtidos do Beleza na Web para EAN %s", ean)
+
                 elif isinstance(beleza_result, Exception):
                     logger.error("Erro no beleza_na_web_scrap para EAN %s: %s", ean, beleza_result)
                 
                 if isinstance(epoca_result, list) and epoca_result:
                     results.extend(epoca_result)
                     logger.info("Resultados obtidos do Época para EAN %s", ean)
+
+                if isinstance(magalu_result, list) and magalu_result:
+                    results.extend(magalu_result)
+                    logger.info("Resultados obtidos do Magalu para EAN %s", ean)
+
                 elif isinstance(epoca_result, Exception):
                     logger.error("Erro no epoca_scrap para EAN %s: %s", ean, epoca_result)
-
+                
+                elif isinstance(magalu_result, Exception):
+                    logger.error("Erro no magalu_scrap para EAN %s: %s", ean, magalu_result)
+                
             if results:
                 logger.info("Enviando %s resultados para EAN %s", len(results), ean)
                 await post_to_products(results, client)
