@@ -226,12 +226,10 @@ async def magalu_scrap(ean: str, marca: str):
             logger.error("[Magalu] Timeout ao carregar a página ou elementos: %s", e)
             content = await page.content()
             logger.error("[Magalu] Conteúdo HTML da página: %s", content)
-            await page.screenshot(path='magalu_timeout_screenshot.png', full_page=True)
         except Exception as e:
             logger.error("[Magalu] Erro geral: %s", e)
             content = await page.content()
             logger.error("[Magalu] Conteúdo HTML da página: %s", content)
-            await page.screenshot(path='magalu_error_screenshot.png', full_page=True)
         finally:
             await context.close()
             await browser.close()
