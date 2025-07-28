@@ -26,7 +26,7 @@ async def epoca_scrap(ean, marca):
     logger.info("[Época] Iniciando para: %s", url)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent=random.choice(USER_AGENTS),
             viewport={"width": 1280, "height": 720},
@@ -194,9 +194,13 @@ async def epoca_scrap(ean, marca):
                             decoded_url = unquote(query_params["ct"][0])
                             link = decoded_url
 
-                    # Extrair imagem
+                    # Extrair imagem e garantir HTTPS
                     img_el = await produto.query_selector("img")
                     imagem = await img_el.get_attribute("src") if img_el else "https://via.placeholder.com/150"
+                    if imagem and imagem.startswith("//"):
+                        imagem = "https:" + imagem
+                    elif imagem and not imagem.startswith("http"):
+                        imagem = "https://www.epocacosmeticos.com.br" + imagem
 
                     # Extrair avaliação (review)
                     review_el = await produto.query_selector(".rate__gray > div")
