@@ -2,7 +2,7 @@ import asyncio
 import json
 import random
 from datetime import datetime, timezone
-from playwright.async_api import async_playwright, TimeoutError
+from playwright.async_api import async_playwright, TimeoutError, Error
 import logging
 
 # Configura o logging
@@ -19,7 +19,7 @@ USER_AGENTS = [
 ]
 
 async def magalu_scrap(ean: str, marca: str):
-    """Realiza o scraping de produtos da Magazine Luiza de forma discreta, retornando todos os produtos encontrados na ordem original."""
+    """Realiza o scraping de produtos da Magazine Luiza de forma discreta, retornando até 5 primeiros produtos encontrados na ordem original."""
     url_busca = f"https://www.magazineluiza.com.br/busca/{ean}"
     lojas = []
 
@@ -52,11 +52,17 @@ async def magalu_scrap(ean: str, marca: str):
 
         try:
             logger.info("[Magalu] Acessando a URL de busca: %s", url_busca)
-            # Acessar a página com retry e backoff
+            # Acessar a página com retry e backoff para erros 429
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    await page.goto(url_busca, timeout=30000)
+                    response = await page.goto(url_busca, timeout=30000)
+                    if response and response.status == 429:
+                        wait_time = 2 ** attempt * random.uniform(2, 5)
+                        logger.warning("[Magalu] Erro 429 Too Many Requests na tentativa %d/%d para EAN %s, esperando %.2f segundos", 
+                                      attempt + 1, max_retries, ean, wait_time)
+                        await asyncio.sleep(wait_time)
+                        continue
                     await page.wait_for_load_state("networkidle", timeout=30000)
                     # Simular comportamento humano: rolagem e espera aleatória
                     logger.info("[Magalu] Rolando a página para garantir renderização...")
@@ -75,6 +81,17 @@ async def magalu_scrap(ean: str, marca: str):
                         await context.close()
                         await browser.close()
                         return lojas
+                except Error as e:
+                    if "net::ERR_TOO_MANY_REQUESTS" in str(e):
+                        wait_time = 2 ** attempt * random.uniform(2, 5)
+                        logger.warning("[Magalu] Erro 429 Too Many Requests na tentativa %d/%d para EAN %s, esperando %.2f segundos", 
+                                      attempt + 1, max_retries, ean, wait_time)
+                        await asyncio.sleep(wait_time)
+                        continue
+                    logger.error("[Magalu] Erro ao acessar a página: %s", e)
+                    await context.close()
+                    await browser.close()
+                    return lojas
 
             # Simular rolagem adicional para carregar conteúdo dinâmico
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -109,6 +126,9 @@ async def magalu_scrap(ean: str, marca: str):
             logger.info("[Magalu] Total de produtos encontrados no JSON-LD: %d", len(products))
 
             for idx, product in enumerate(products):
+                if idx >= 5:  # Limita a 5 produtos
+                    logger.info("[Magalu] Limite de 5 produtos atingido. Interrompendo processamento.")
+                    break
                 try:
                     # Extrai informações do JSON-LD
                     descricao = product.get("name", "Descrição não encontrada")
@@ -127,11 +147,40 @@ async def magalu_scrap(ean: str, marca: str):
 
                     try:
                         product_page = await context.new_page()
-                        await product_page.goto(produto_url, timeout=30000)
-                        await product_page.wait_for_load_state("networkidle", timeout=30000)
-                        loja_element = await product_page.query_selector('label[data-testid="link"]')
-                        loja = await loja_element.inner_text() if loja_element else "Desconhecido"
-                        await product_page.close()
+                        for attempt in range(max_retries):
+                            try:
+                                response = await product_page.goto(produto_url, timeout=30000)
+                                if response and response.status == 429:
+                                    wait_time = 2 ** attempt * random.uniform(2, 5)
+                                    logger.warning("[Magalu] Erro 429 Too Many Requests ao acessar produto %d na tentativa %d/%d, esperando %.2f segundos", 
+                                                  idx + 1, attempt + 1, max_retries, wait_time)
+                                    await asyncio.sleep(wait_time)
+                                    continue
+                                await product_page.wait_for_load_state("networkidle", timeout=30000)
+                                loja_element = await product_page.query_selector('label[data-testid="link"]')
+                                loja = await loja_element.inner_text() if loja_element else "Desconhecido"
+                                await product_page.close()
+                                break
+                            except TimeoutError as e:
+                                logger.warning("[Magalu] Timeout ao acessar produto %d (tentativa %d/%d): %s", idx + 1, attempt + 1, max_retries, e)
+                                if attempt < max_retries - 1:
+                                    await asyncio.sleep(random.uniform(2, 5))
+                                else:
+                                    logger.error("[Magalu] Falha após %d tentativas ao acessar produto %d", max_retries, idx + 1)
+                                    loja = "Desconhecido"
+                                    await product_page.close()
+                                    break
+                            except Error as e:
+                                if "net::ERR_TOO_MANY_REQUESTS" in str(e):
+                                    wait_time = 2 ** attempt * random.uniform(2, 5)
+                                    logger.warning("[Magalu] Erro 429 Too Many Requests ao acessar produto %d na tentativa %d/%d, esperando %.2f segundos", 
+                                                  idx + 1, attempt + 1, max_retries, wait_time)
+                                    await asyncio.sleep(wait_time)
+                                    continue
+                                logger.warning("[Magalu] Erro ao acessar produto %d: %s", idx + 1, e)
+                                loja = "Desconhecido"
+                                await product_page.close()
+                                break
                     except Exception as e:
                         logger.warning("[Magalu] Erro ao extrair nome da loja para produto %d: %s", idx + 1, e)
                         loja = "Desconhecido"
@@ -168,7 +217,7 @@ async def magalu_scrap(ean: str, marca: str):
                     logger.error("[Magalu] Erro ao processar produto %d: %s", idx + 1, e)
                     continue
 
-            # Retorna todos os produtos
+            # Retorna até 5 produtos
             logger.info("[Magalu] Total de produtos extraídos: %d", len(lojas))
             for produto in lojas:
                 print(json.dumps(produto, indent=2, ensure_ascii=False))
@@ -188,11 +237,3 @@ async def magalu_scrap(ean: str, marca: str):
             await browser.close()
 
     return lojas
-
-if __name__ == "__main__":
-    async def run_scraper():
-        ean = "4064666318356"
-        marca = "Wella Professionals"
-        results = await magalu_scrap(ean, marca)
-
-    asyncio.run(run_scraper())
