@@ -20,14 +20,14 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/127.0.0.0"
 ]
 
-async def epoca_scrap(ean, marca):
+async def epoca_scrap(ean, marca,headless:bool):
     """Realiza o scraping de produtos da Época Cosméticos de forma discreta."""
     url = f"https://www.epocacosmeticos.com.br/pesquisa?q={ean}"
     logger.info("[Época] Iniciando raspagem para: %s", url)
 
     async with async_playwright() as p:
         # Lançar navegador em modo headless
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=headless)
         context = await browser.new_context(
             user_agent=random.choice(USER_AGENTS),  # Rotação de User-Agent
             viewport={"width": 1280, "height": 720},
@@ -204,7 +204,7 @@ if __name__ == "__main__":
     async def run_scraper():
         ean = "4064666318356"
         marca = "Wella"
-        results = await epoca_scrap(ean, marca)
+        results = await epoca_scrap(ean, marca,True)
         for result in results:
             print(json.dumps(result, indent=2, ensure_ascii=False))
 

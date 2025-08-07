@@ -9,6 +9,7 @@ from decimal import Decimal
 import logging
 from datetime import datetime, timezone
 import time
+import random
 
 # Configura o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -105,6 +106,7 @@ async def post_to_products(products, client):
 
 async def scrape_url(row, semaphore, client, scrape_stats):
     """Processa uma única linha do DataFrame, executando os scrapers apropriados."""
+    headless = True
     async with semaphore:
         ean = row['ean']
         url = row['url']
@@ -122,16 +124,16 @@ async def scrape_url(row, semaphore, client, scrape_stats):
         try:
             if "amazon" in url.lower():
                 logger.info("Executando amazon_scrap para EAN: %s", ean)
-                amazon_result = await amazon_scrap(url, ean, brand)
+                amazon_result = await amazon_scrap(url, ean, brand, headless)
                 if amazon_result:
                     results.extend(amazon_result)
                     logger.info("Resultados obtidos do Amazon para EAN %s", ean)
             elif "belezanaweb" in url.lower():
                 # Executa beleza_na_web_scrap, epoca_scrap e magalu_scrap em paralelo
                 logger.info("Executando beleza_na_web_scrap, epoca_scrap e magalu_scrap para EAN: %s", ean)
-                beleza_task = beleza_na_web_scrap(url, ean, brand)
-                epoca_task = epoca_scrap(ean, brand)
-                magalu_task = magalu_scrap(ean, brand)
+                beleza_task = beleza_na_web_scrap(url, ean, brand, headless)
+                epoca_task = epoca_scrap(ean, brand, headless)
+                magalu_task = magalu_scrap(ean, brand, headless)
                 beleza_result, epoca_result, magalu_result = await asyncio.gather(beleza_task, epoca_task, magalu_task, return_exceptions=True)
                 
                 if isinstance(beleza_result, list) and beleza_result:

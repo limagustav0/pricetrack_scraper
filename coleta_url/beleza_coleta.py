@@ -80,6 +80,10 @@ async def coleta_beleza(ean,cliente):
     print("\nRESULTADO FINAL:")
     pprint(results)
 
+lista_blz = [
+    '7792254325208'
+]
 if __name__ == "__main__":
     cliente = "Época Cosméticos"
-    asyncio.run(coleta_beleza("8005610672427",cliente))
+    for ean in lista_blz:
+        asyncio.run(coleta_beleza(ean,cliente))

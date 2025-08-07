@@ -23,7 +23,7 @@ USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36"
 ]
 
-async def amazon_scrap(target_url: str, ean: str, marca: str) -> list:
+async def amazon_scrap(target_url: str, ean: str, marca: str,headless) -> list:
     """Realiza o scraping de produtos da Amazon de forma discreta, retornando os 10 primeiros produtos na ordem original."""
     logger.info("[Amazon] Iniciando raspagem para: %s", target_url)
     start_time = time.time()
@@ -36,7 +36,7 @@ async def amazon_scrap(target_url: str, ean: str, marca: str) -> list:
 
     async with async_playwright() as p:
         # Lança o navegador em modo headless
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=headless)
         context = await browser.new_context(
             user_agent=random.choice(USER_AGENTS),  # Rotação de User-Agent
             viewport={"width": 1280, "height": 720},  # Aumentado para maior realismo
@@ -319,6 +319,6 @@ if __name__ == "__main__":
         target_url = "https://www.amazon.com.br/Wella-3922-Shampoo-1000Ml-Brilliance/dp/B0C3MHGZXP/ref=sr_1_1"
         ean = "4064666318356"
         marca = "Wella"
-        results = await amazon_scrap(target_url, ean, marca)
+        results = await amazon_scrap(target_url, ean, marca,True)
 
     asyncio.run(run_scraper())
