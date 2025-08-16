@@ -210,6 +210,10 @@ async def main():
             save_report(scrape_stats, time.time() - start_total_time)
             return None
 
+        # Filtrar apenas URLs com is_active=True
+        df = df[df['is_active'] == True]
+        logger.info("Filtrando %d URLs com is_active=True", len(df))
+
         logger.info("Colunas do DataFrame: %s", df.columns.tolist())
         required_columns = ['url', 'ean', 'brand']
         if not all(col in df.columns for col in required_columns):
