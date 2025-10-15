@@ -55,7 +55,7 @@ async def magalu_scrap(ean: str, marca: str, headless: bool):
             logger.info("[Magalu] Acessando a URL de busca: %s", url_busca)
             response = await page.goto(url_busca)
             if response:
-                logger.info("[Magalu] Status da resposta: %d, Headers: %s", response.status, response.headers)
+                logger.info("[Magalu] Status da resposta: %d", response.status)
             if response and response.status == 429:
                 logger.warning("[Magalu] Erro 429 Too Many Requests para EAN %s", ean)
                 content = await page.content()
@@ -91,6 +91,8 @@ async def magalu_scrap(ean: str, marca: str, headless: bool):
                 if idx >= 5:
                     logger.info("[Magalu] Limite de 5 produtos atingido. Interrompendo processamento.")
                     break
+                
+                product_page = None
                 try:
                     descricao = product.get("name", "Descrição não encontrada")
                     produto_url = product.get("offers", {}).get("url", "")
@@ -106,21 +108,70 @@ async def magalu_scrap(ean: str, marca: str, headless: bool):
                     sku = product.get("sku", "SKU não encontrado")
                     brand = product.get("brand", marca)
 
+                    # Extrair nome da loja - CORREÇÃO AQUI
+                    loja = "Desconhecido"
                     try:
                         product_page = await context.new_page()
-                        response = await product_page.goto(produto_url)
+                        response = await product_page.goto(produto_url, timeout=30000)
+                        
                         if response and response.status == 429:
-                            logger.warning("[Magalu] Erro 429 Too Many Requests ao acessar produto %d para EAN %s", idx + 1, ean)
-                            await product_page.close()
-                            loja = "Desconhecido"
+                            logger.warning("[Magalu] Erro 429 ao acessar produto %d para EAN %s", idx + 1, ean)
                         else:
                             await product_page.wait_for_load_state("networkidle")
-                            loja_element = await product_page.query_selector('label[data-testid="link"]')
-                            loja = await loja_element.inner_text() if loja_element else "Desconhecido"
-                            await product_page.close()
+                            await asyncio.sleep(random.uniform(1, 2))
+                            
+                            # Múltiplas tentativas de extração da loja
+                            # Tentativa 1: span com classe text-interaction-default
+                            loja_element = await product_page.query_selector('span.text-interaction-default[role="button"]')
+                            if loja_element:
+                                loja = (await loja_element.inner_text()).strip()
+                                logger.info("[Magalu] Loja encontrada (método 1): %s", loja)
+                            
+                            # Tentativa 2: qualquer span com role="button"
+                            if loja == "Desconhecido":
+                                loja_element = await product_page.query_selector('span[role="button"]')
+                                if loja_element:
+                                    loja = (await loja_element.inner_text()).strip()
+                                    logger.info("[Magalu] Loja encontrada (método 2): %s", loja)
+                            
+                            # Tentativa 3: buscar por label[data-testid="link"]
+                            if loja == "Desconhecido":
+                                loja_element = await product_page.query_selector('label[data-testid="link"]')
+                                if loja_element:
+                                    loja = (await loja_element.inner_text()).strip()
+                                    logger.info("[Magalu] Loja encontrada (método 3): %s", loja)
+                            
+                            # Tentativa 4: buscar por qualquer elemento que contenha "Vendido e entregue por"
+                            if loja == "Desconhecido":
+                                loja_text = await product_page.evaluate('''() => {
+                                    const elements = Array.from(document.querySelectorAll('*'));
+                                    for (let el of elements) {
+                                        if (el.textContent.includes('Vendido e entregue por') || 
+                                            el.textContent.includes('Vendido por')) {
+                                            return el.textContent;
+                                        }
+                                    }
+                                    return null;
+                                }''')
+                                if loja_text:
+                                    # Extrair nome da loja do texto
+                                    import re
+                                    match = re.search(r'(?:Vendido (?:e entregue )?por[:\s]+)([^<\n]+)', loja_text)
+                                    if match:
+                                        loja = match.group(1).strip()
+                                        logger.info("[Magalu] Loja encontrada (método 4): %s", loja)
+                            
+                            if loja == "Desconhecido":
+                                logger.warning("[Magalu] Não foi possível extrair loja para produto %d", idx + 1)
+                                # Debug: salvar screenshot
+                                await product_page.screenshot(path=f'magalu_loja_debug_{idx}.png')
+                                
                     except Exception as e:
                         logger.warning("[Magalu] Erro ao extrair nome da loja para produto %d: %s", idx + 1, e)
                         loja = "Desconhecido"
+                    finally:
+                        if product_page:
+                            await product_page.close()
 
                     marketplace = "Magazine Luiza"
                     data_hora = datetime.now(timezone.utc).isoformat()
@@ -147,15 +198,17 @@ async def magalu_scrap(ean: str, marca: str, headless: bool):
                     }
 
                     lojas.append(resultado)
-                    logger.info("[Magalu] Produto %d extraído: %s", idx + 1, descricao)
+                    logger.info("[Magalu] Produto %d extraído: %s - Loja: %s", idx + 1, descricao, loja)
 
                 except Exception as e:
                     logger.error("[Magalu] Erro ao processar produto %d: %s", idx + 1, e)
+                    if product_page:
+                        await product_page.close()
                     continue
 
             logger.info("[Magalu] Total de produtos extraídos: %d", len(lojas))
-            # Removido o print dos produtos
-
+            print(lojas)
+            
         except TimeoutError as e:
             logger.error("[Magalu] Timeout ao carregar a página ou elementos: %s", e)
             content = await page.content()

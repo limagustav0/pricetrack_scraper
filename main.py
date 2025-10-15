@@ -1,10 +1,10 @@
 import asyncio
 import httpx
 import pandas as pd
-from amazon_scraper import amazon_scrap
-from beleza_scraper import beleza_na_web_scrap
-from magalu_scraper import magalu_scrap
-from epoca_scraper import epoca_scrap
+from scrapers.amazon_scraper import amazon_scrap
+from scrapers.beleza_scraper import beleza_na_web_scrap
+from scrapers.magalu_scraper import magalu_scrap
+from scrapers.epoca_scraper import epoca_scrap
 from decimal import Decimal
 import logging
 from datetime import datetime, timezone
@@ -15,8 +15,9 @@ import random
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-API_ENDPOINT = "http://201.23.64.234:8000/api/urls/"
-PRODUCTS_ENDPOINT = "http://201.23.64.234:8000/api/products"
+#API_ENDPOINT = "http://201.23.64.234:8000/api/urls/"
+PRODUCTS_ENDPOINT = "http://localhost:8000/api/products"
+API_ENDPOINT = "http://localhost:8000/api/urls/"
 
 # Limite de concorrência para melhorar a velocidade
 CONCURRENCY_LIMIT = 20
@@ -44,7 +45,7 @@ async def get_from_api(client):
             logger.warning("Resposta não é uma lista")
             return None
         except httpx.RequestError as e:
-            logger.error("Erro ao conectar com a API: %s", e)
+            print(e)
             if attempt < max_retries - 1:
                 await asyncio.sleep(random.uniform(2, 5))
             else:

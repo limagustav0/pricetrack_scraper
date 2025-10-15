@@ -8,3 +8,4 @@ services:
     volumes:
       - ./:/app
     command: python main.py
+    network_mode: "host"

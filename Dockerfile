@@ -29,10 +29,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Instala Playwright e seus navegadores
-RUN pip install playwright && playwright install --with-deps
+RUN playwright install --with-deps
 
 # Copia o restante da aplicação
 COPY . .
 
 # Comando padrão (ajuste conforme necessário)
 CMD ["python", "main.py"]
+
+
