@@ -1,0 +1,13 @@
+Relatório de Scraping - 2025-10-16 15:39:58 UTC
+================================================================================
+
+Tempos de Execução por EAN:
+----------------------------------------
+
+Resumo:
+----------------------------------------
+Total de EANs processados: 0
+Total de erros: 0
+Tempo total de execução: 13.33 segundos
+
+Nenhum EAN com erro.

@@ -6,7 +6,7 @@ from datetime import datetime
 from urllib.parse import unquote, urlparse, parse_qs
 from playwright.async_api import async_playwright
 import logging
-
+from otel.trace import tracer
 # Configura o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

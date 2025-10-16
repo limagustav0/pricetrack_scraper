@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from crawl4ai import AsyncWebCrawler
 from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig
-
+from otel.trace import tracer
 async def beleza_na_web_scrap(target_url: str, ean: str, marca: str,headless:bool):
     """
     Crawls the Beleza na Web product page and extracts store data.

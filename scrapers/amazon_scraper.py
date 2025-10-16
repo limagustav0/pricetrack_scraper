@@ -7,6 +7,8 @@ import time
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError
 import logging
+from otel.trace import tracer
+
 
 # Configura o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

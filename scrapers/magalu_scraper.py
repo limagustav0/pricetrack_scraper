@@ -4,7 +4,7 @@ import random
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright, TimeoutError, Error
 import logging
-
+from otel.trace import tracer
 # Configura o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
