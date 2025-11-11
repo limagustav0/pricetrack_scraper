@@ -1,244 +1,447 @@
 import asyncio
 import httpx
 import pandas as pd
-from scrapers.amazon_scraper import amazon_scrap
-from scrapers.beleza_scraper import beleza_na_web_scrap
-from scrapers.magalu_scraper import magalu_scrap
-from scrapers.epoca_scraper import epoca_scrap
+from amazon_scraper import amazon_scrap
+from beleza_scraper import beleza_na_web_scrap
+from magalu_scraper import magalu_scrap
+from epoca_scraper import epoca_scrap
+from meli_scraper import mercadolivre_scrap
 from decimal import Decimal
 import logging
 from datetime import datetime, timezone
 import time
 import random
+from otel.trace import tracer
 
-# Configura o logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configura o logging (apenas console, sem arquivo)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
-#API_ENDPOINT = "http://201.23.64.234:8000/api/urls/"
-PRODUCTS_ENDPOINT = "http://localhost:8000/api/products"
-API_ENDPOINT = "http://localhost:8000/api/urls/"
+# ============================================
+# CONFIGURAÇÕES
+# ============================================
+URL = "https://pricetrack-api.onrender.com"
+PRODUCTS_ENDPOINT = f"{URL}/api/products"
+API_ENDPOINT = f"{URL}/api/urls/"
 
-# Limite de concorrência para melhorar a velocidade
-CONCURRENCY_LIMIT = 20
-REQUEST_TIMEOUT = 8
+# Limites e timeouts
+CONCURRENCY_LIMIT = 5
+REQUEST_TIMEOUT = 30.0
+MAX_RETRIES = 3
+DELAY_BETWEEN_SCRAPES = 2
+
+
+# ============================================
+# FUNÇÕES AUXILIARES
+# ============================================
 
 async def get_from_api(client):
     """Obtém dados da API e retorna um DataFrame."""
-    max_retries = 3
-    for attempt in range(max_retries):
+    for attempt in range(MAX_RETRIES):
         try:
-            logger.info("Iniciando requisição GET para: %s", API_ENDPOINT)
+            logger.info("[API] Tentativa %d/%d - GET %s", attempt + 1, MAX_RETRIES, API_ENDPOINT)
             response = await client.get(API_ENDPOINT, timeout=REQUEST_TIMEOUT)
-            if response.status_code == 429:
-                wait_time = 2 ** attempt * random.uniform(2, 5)
-                logger.warning("[API] Erro 429 Too Many Requests na tentativa %d/%d para GET API, esperando %.2f segundos", 
-                              attempt + 1, max_retries, wait_time)
-                await asyncio.sleep(wait_time)
-                continue
-            if response.status_code != 200:
-                logger.error("Erro na API: %s", response.status_code)
-                return None
-            response_data = response.json()
-            if isinstance(response_data, list):
-                return pd.DataFrame(response_data)
-            logger.warning("Resposta não é uma lista")
-            return None
-        except httpx.RequestError as e:
-            print(e)
-            if attempt < max_retries - 1:
-                await asyncio.sleep(random.uniform(2, 5))
-            else:
-                logger.error("[API] Falha após %d tentativas para GET API", max_retries)
-                return None
-        except ValueError as e:
-            logger.error("Erro ao processar JSON: %s", e)
-            return None
-
-async def post_to_products(products, client):
-    """Envia uma lista de produtos para o endpoint POST /products."""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            payload = []
-            for product in products:
-                product_data = {
-                    "ean": product["ean"],
-                    "sku": product.get("sku", "SKU não encontrado"),
-                    "loja": product.get("loja", "-"),
-                    "preco_final": str(Decimal(str(product.get("preco_final", 0.00)))),
-                    "marketplace": product.get("marketplace", "Desconhecido"),
-                    "key_loja": product.get("key_loja", "sem_loja"),
-                    "key_sku": product.get("key_sku", f"{product['ean']}_{product.get('loja', 'sem_loja')}"),
-                    "descricao": product.get("descricao", "Sem descrição"),
-                    "review": float(product.get("review", 0.0)),
-                    "imagem": product.get("imagem", "https://via.placeholder.com/150"),
-                    "status": product.get("status", "ativo"),
-                    "preco_pricing": str(Decimal(str(product["preco_pricing"]))) if product.get("preco_pricing") else None,
-                    "url": product.get("url", "-"),
-                    "marca": product.get("marca", "Marca não informada")
-                }
-                if "price" in product and "preco_final" not in product:
-                    product_data["preco_final"] = str(Decimal(str(product["price"])))
-                if "image" in product and "imagem" not in product:
-                    product_data["imagem"] = product["image"]
-                payload.append(product_data)
             
-            logger.info("Enviando %s produtos para %s", len(payload), PRODUCTS_ENDPOINT)
-            response = await client.post(PRODUCTS_ENDPOINT, json=payload, timeout=REQUEST_TIMEOUT)
             if response.status_code == 429:
-                wait_time = 2 ** attempt * random.uniform(2, 5)
-                logger.warning("[API] Erro 429 Too Many Requests na tentativa %d/%d para POST produtos, esperando %.2f segundos", 
-                              attempt + 1, max_retries, wait_time)
+                wait_time = (2 ** attempt) * random.uniform(2, 5)
+                logger.warning("[API] Rate limit atingido, aguardando %.2fs", wait_time)
                 await asyncio.sleep(wait_time)
                 continue
-            if response.status_code == 200:
-                logger.info("Produtos enviados com sucesso")
-                return response.json()
-            logger.error("Erro ao enviar produtos: %s", response.status_code)
-            return None
-        except (httpx.RequestError, ValueError) as e:
-            logger.error("Erro ao enviar produtos: %s", e)
-            if attempt < max_retries - 1:
-                await asyncio.sleep(random.uniform(2, 5))
-            else:
-                logger.error("[API] Falha após %d tentativas para POST produtos", max_retries)
+            
+            if response.status_code != 200:
+                logger.error("[API] Erro HTTP %d: %s", response.status_code, response.text[:200])
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(random.uniform(2, 5))
+                    continue
                 return None
+            
+            response_data = response.json()
+            if not isinstance(response_data, list):
+                logger.error("[API] Resposta não é uma lista: %s", type(response_data))
+                return None
+            
+            df = pd.DataFrame(response_data)
+            logger.info("[API] Obtidos %d registros", len(df))
+            return df
+            
+        except httpx.TimeoutException:
+            logger.error("[API] Timeout na tentativa %d/%d", attempt + 1, MAX_RETRIES)
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(random.uniform(2, 5))
+        except httpx.RequestError as e:
+            logger.error("[API] Erro de requisição: %s", e)
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(random.uniform(2, 5))
+        except Exception as e:
+            logger.error("[API] Erro inesperado: %s", e)
+            return None
+    
+    logger.error("[API] Falha após %d tentativas", MAX_RETRIES)
+    return None
 
-async def scrape_url(row, semaphore, client, scrape_stats):
-    """Processa uma única linha do DataFrame, executando os scrapers apropriados."""
-    headless = True
+
+async def post_to_products(products, client, ean):
+    """Envia uma lista de produtos para o endpoint /products."""
+    if not products:
+        logger.warning("[POST] [EAN %s] Lista de produtos vazia, nada para enviar", ean)
+        return None
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            logger.info("[POST] [EAN %s] Tentativa %d/%d - Enviando %d produtos", 
+                       ean, attempt + 1, MAX_RETRIES, len(products))
+            
+            response = await client.post(
+                PRODUCTS_ENDPOINT, 
+                json=products, 
+                timeout=REQUEST_TIMEOUT
+            )
+            
+            if response.status_code == 429:
+                wait_time = (2 ** attempt) * random.uniform(2, 5)
+                logger.warning("[POST] [EAN %s] Rate limit, aguardando %.2fs", ean, wait_time)
+                await asyncio.sleep(wait_time)
+                continue
+            
+            if response.status_code in [200, 201]:
+                response_data = response.json()
+                ativos = sum(1 for p in response_data if p.get('status') == 'ativo')
+                inativos = sum(1 for p in response_data if p.get('status') == 'inativo')
+                logger.info("[POST] [EAN %s] Enviado com sucesso: %d ativos, %d inativos", 
+                           ean, ativos, inativos)
+                return response_data
+            
+            logger.error("[POST] [EAN %s] Erro HTTP %d: %s", 
+                        ean, response.status_code, response.text[:200])
+            
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(random.uniform(2, 5))
+                continue
+            return None
+            
+        except httpx.TimeoutException:
+            logger.error("[POST] [EAN %s] Timeout na tentativa %d/%d", ean, attempt + 1, MAX_RETRIES)
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(random.uniform(2, 5))
+        except httpx.RequestError as e:
+            logger.error("[POST] [EAN %s] Erro de requisição: %s", ean, e)
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(random.uniform(2, 5))
+        except Exception as e:
+            logger.error("[POST] [EAN %s] Erro inesperado: %s", ean, e)
+            return None
+    
+    logger.error("[POST] [EAN %s] Falha após %d tentativas", ean, MAX_RETRIES)
+    return None
+
+
+async def scrape_url(row, semaphore, scrape_stats, client):
+    """Executa os scrapers apropriados para um EAN e envia para a API."""
     async with semaphore:
         ean = row['ean']
         url = row['url']
         brand = row['brand']
-        start_time = time.time()  # Captura tempo inicial
+        categoria = row.get('categoria', 'cosmetico')
+        headless = True
         
-        # Validação inicial da URL
+        # Validações
         if not url or not isinstance(url, str):
-            logger.warning("URL inválida para EAN %s, ignorando", ean)
-            scrape_stats[ean] = {"time": 0, "error": "URL inválida"}
+            logger.warning("[EAN %s] URL inválida: %s", ean, url)
+            scrape_stats[ean] = {"time": 0, "products": 0, "error": "URL inválida"}
             return None
-
-        logger.info("Processando EAN: %s", ean)
-        results = []
-        try:
-            if "amazon" in url.lower():
-                logger.info("Executando amazon_scrap para EAN: %s", ean)
-                amazon_result = await amazon_scrap(url, ean, brand, headless)
-                if amazon_result:
-                    results.extend(amazon_result)
-                    logger.info("Resultados obtidos do Amazon para EAN %s", ean)
-            elif "belezanaweb" in url.lower():
-                # Executa beleza_na_web_scrap, epoca_scrap e magalu_scrap em paralelo
-                logger.info("Executando beleza_na_web_scrap, epoca_scrap e magalu_scrap para EAN: %s", ean)
-                beleza_task = beleza_na_web_scrap(url, ean, brand, headless)
-                epoca_task = epoca_scrap(ean, brand, headless)
-                magalu_task = magalu_scrap(ean, brand, headless)
-                beleza_result, epoca_result, magalu_result = await asyncio.gather(beleza_task, epoca_task, magalu_task, return_exceptions=True)
-                
-                if isinstance(beleza_result, list) and beleza_result:
-                    results.extend(beleza_result)
-                    logger.info("Resultados obtidos do Beleza na Web para EAN %s", ean)
-                elif isinstance(beleza_result, Exception):
-                    logger.error("Erro no beleza_na_web_scrap para EAN %s: %s", ean, beleza_result)
-                
-                if isinstance(epoca_result, list) and epoca_result:
-                    results.extend(epoca_result)
-                    logger.info("Resultados obtidos do Época para EAN %s", ean)
-                elif isinstance(epoca_result, Exception):
-                    logger.error("Erro no epoca_scrap para EAN %s: %s", ean, epoca_result)
-                
-                if isinstance(magalu_result, list) and magalu_result:
-                    results.extend(magalu_result)
-                    logger.info("Resultados obtidos do Magalu para EAN %s", ean)
-                elif isinstance(magalu_result, Exception):
-                    logger.error("Erro no magalu_scrap para EAN %s: %s", ean, magalu_result)
-                
-            if results:
-                logger.info("Enviando %s resultados para EAN %s", len(results), ean)
-                await post_to_products(results, client)
-                scrape_stats[ean] = {"time": time.time() - start_time, "error": None}  # Registra tempo e sucesso
-            else:
-                logger.warning("Nenhum resultado retornado para EAN: %s", ean)
-                scrape_stats[ean] = {"time": time.time() - start_time, "error": "Nenhum resultado retornado"}
-            return results
-        except Exception as e:
-            logger.error("Erro ao processar EAN %s: %s", ean, e)
-            scrape_stats[ean] = {"time": time.time() - start_time, "error": str(e)}  # Registra tempo e erro
+        
+        if not ean or not isinstance(ean, str) or len(ean) != 13:
+            logger.warning("[URL %s] EAN inválido: %s", url, ean)
+            scrape_stats[ean] = {"time": 0, "products": 0, "error": "EAN inválido"}
             return None
+        
+        logger.info("=" * 80)
+        logger.info("[EAN %s] Iniciando scraping", ean)
+        logger.info("[EAN %s] URL: %s", ean, url)
+        logger.info("[EAN %s] Marca: %s", ean, brand)
+        logger.info("=" * 80)
+        
+        start_time = time.time()
+        all_results = []
+        errors = []
 
-def save_report(scrape_stats, total_time):
-    """Salva um relatório em formato txt com tempo de execução e erros."""
-    total_eans = len(scrape_stats)
-    errors = [ean for ean, stats in scrape_stats.items() if stats["error"]]
-    error_count = len(errors)
-    
-    with open("scrape_report.txt", "w", encoding="utf-8") as f:
-        f.write(f"Relatório de Scraping - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
-        f.write("=" * 80 + "\n\n")
-        
-        f.write("Tempos de Execução por EAN:\n")
-        f.write("-" * 40 + "\n")
-        for ean, stats in scrape_stats.items():
-            time_taken = stats["time"]
-            status = "Sucesso" if not stats["error"] else f"Erro: {stats['error']}"
-            f.write(f"EAN: {ean} | Tempo: {time_taken:.2f} segundos | Status: {status}\n")
-        
-        f.write("\nResumo:\n")
-        f.write("-" * 40 + "\n")
-        f.write(f"Total de EANs processados: {total_eans}\n")
-        f.write(f"Total de erros: {error_count}\n")
-        f.write(f"Tempo total de execução: {total_time:.2f} segundos\n")
-        
-        if errors:
-            f.write("\nEANs com erro:\n")
-            f.write("-" * 40 + "\n")
-            for ean in errors:
-                f.write(f"EAN: {ean} | Erro: {scrape_stats[ean]['error']}\n")
-        else:
-            f.write("\nNenhum EAN com erro.\n")
+        with tracer.start_as_current_span("scrape_url") as span_main:
+            span_main.set_attribute("ean", ean)
+            span_main.set_attribute("url", url)
+            span_main.set_attribute("brand", brand)
+            
+            try:
+                # AMAZON
+                if "amazon" in url.lower():
+                    with tracer.start_as_current_span("amazon_scraping") as span_child:
+                        logger.info("[EAN %s] Iniciando scraping AMAZON", ean)
+                        try:
+                            amazon_result = await amazon_scrap(url, ean, brand, headless, categoria)
+                            if amazon_result and isinstance(amazon_result, list):
+                                all_results.extend(amazon_result)
+                                logger.info("[EAN %s] Amazon: %d produtos coletados", ean, len(amazon_result))
+                            else:
+                                logger.warning("[EAN %s] Amazon: nenhum produto retornado", ean)
+                        except Exception as e:
+                            error_msg = f"Erro Amazon: {str(e)}"
+                            errors.append(error_msg)
+                            logger.error("[EAN %s] %s", ean, error_msg)
+                            span_child.record_exception(e)
+                
+                elif "mercadolivre" in url.lower():
+                    with tracer.start_as_current_span("meli_scraping") as span_child:
+                        logger.info("[EAN %s] Iniciando scraping MERCADO LIVRE", ean)
+                        try:
+                            meli_result = await mercadolivre_scrap(url, ean, brand, headless, categoria)
+                            if meli_result and isinstance(meli_result, list):
+                                all_results.extend(meli_result)
+                                logger.info("[EAN %s] Meli: %d produtos coletados", ean, len(meli_result))
+                            else:
+                                logger.warning("[EAN %s] Meli: nenhum produto retornado", ean)
+                        except Exception as e:
+                            error_msg = f"Erro Meli: {str(e)}"
+                            errors.append(error_msg)
+                            logger.error("[EAN %s] %s", ean, error_msg)
+                            span_child.record_exception(e)
+
+                # BELEZA NA WEB + ÉPOCA + MAGALU
+                elif "belezanaweb" in url.lower():
+                    logger.info("[EAN %s] Iniciando scraping BELEZA + ÉPOCA + MAGALU", ean)
+                    
+                    tasks = []
+                    task_names = []
+                    
+                    with tracer.start_as_current_span("beleza_scraping"):
+                        tasks.append(beleza_na_web_scrap(url, ean, brand, categoria))
+                        task_names.append("Beleza na Web")
+                    
+                    with tracer.start_as_current_span("epoca_scraping"):
+                        tasks.append(epoca_scrap(ean, brand, headless, categoria))
+                        task_names.append("Época")
+                    
+                    with tracer.start_as_current_span("magalu_scraping"):
+                        tasks.append(magalu_scrap(ean, brand, headless, categoria))
+                        task_names.append("Magalu")
+                    
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    for task_name, result in zip(task_names, results):
+                        if isinstance(result, Exception):
+                            error_msg = f"Erro {task_name}: {str(result)}"
+                            errors.append(error_msg)
+                            logger.error("[EAN %s] %s", ean, error_msg)
+                        elif isinstance(result, list) and result:
+                            all_results.extend(result)
+                            logger.info("[EAN %s] %s: %d produtos coletados", ean, task_name, len(result))
+                        else:
+                            logger.warning("[EAN %s] %s: nenhum produto", ean, task_name)
+                
+                else:
+                    error_msg = f"Marketplace não suportado: {url}"
+                    errors.append(error_msg)
+                    logger.error("[EAN %s] %s", ean, error_msg)
+                    scrape_stats[ean] = {
+                        "time": 0,
+                        "products": 0,
+                        "error": error_msg
+                    }
+                    return None
+                
+                # ENVIAR PARA A API
+                if all_results:
+                    logger.info("[EAN %s] Enviando %d produtos para a API...", ean, len(all_results))
+                    api_response = await post_to_products(all_results, client, ean)
+                    
+                    if api_response:
+                        logger.info("[EAN %s] Produtos enviados com sucesso", ean)
+                    else:
+                        error_msg = "Falha ao enviar produtos para API"
+                        errors.append(error_msg)
+                        logger.error("[EAN %s] %s", ean, error_msg)
+                else:
+                    logger.warning("[EAN %s] Nenhum produto para enviar", ean)
+                
+                # ESTATÍSTICAS
+                elapsed_time = time.time() - start_time
+                
+                scrape_stats[ean] = {
+                    "time": round(elapsed_time, 2),
+                    "products": len(all_results),
+                    "errors": errors if errors else None
+                }
+                
+                logger.info("=" * 80)
+                logger.info("[EAN %s] Scraping concluído", ean)
+                logger.info("[EAN %s] Tempo: %.2fs", ean, elapsed_time)
+                logger.info("[EAN %s] Produtos: %d", ean, len(all_results))
+                if errors:
+                    logger.info("[EAN %s] Erros: %d", ean, len(errors))
+                logger.info("=" * 80)
+                
+                span_main.set_attribute("products_count", len(all_results))
+                span_main.set_attribute("elapsed_time", elapsed_time)
+                
+                await asyncio.sleep(DELAY_BETWEEN_SCRAPES)
+                
+                return len(all_results)
+                
+            except Exception as e:
+                elapsed_time = time.time() - start_time
+                error_msg = f"Erro geral: {str(e)}"
+                errors.append(error_msg)
+                
+                logger.error("[EAN %s] Erro fatal: %s", ean, e)
+                span_main.record_exception(e)
+                
+                scrape_stats[ean] = {
+                    "time": round(elapsed_time, 2),
+                    "products": 0,
+                    "error": error_msg
+                }
+                
+                return None
+
+
+# ============================================
+# FUNÇÃO PRINCIPAL
+# ============================================
 
 async def main():
-    logger.info("Início da Execução - %s", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
-    start_total_time = time.time()  # Captura tempo inicial do programa
+    """Orquestrador principal do sistema de scraping."""
+    logger.info("=" * 80)
+    logger.info("INICIANDO SISTEMA DE SCRAPING")
+    logger.info("=" * 80)
+    logger.info("Início: %s", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+    logger.info("Concorrência: %d", CONCURRENCY_LIMIT)
+    logger.info("Timeout: %.1fs", REQUEST_TIMEOUT)
+    logger.info("API Endpoint: %s", PRODUCTS_ENDPOINT)
+    logger.info("=" * 80)
     
-    scrape_stats = {}  # Dicionário para armazenar tempos e erros por EAN
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        df = await get_from_api(client)
-        if df is None or df.empty:
-            logger.warning("Nenhum dado válido retornado ou DataFrame vazio")
-            save_report(scrape_stats, time.time() - start_total_time)
-            return None
-
-        # Filtrar apenas URLs com is_active=True
-        df = df[df['is_active'] == True]
-        logger.info("Filtrando %d URLs com is_active=True", len(df))
-
-        logger.info("Colunas do DataFrame: %s", df.columns.tolist())
-        required_columns = ['url', 'ean', 'brand']
-        if not all(col in df.columns for col in required_columns):
-            logger.error("DataFrame não contém todas as colunas necessárias: %s", required_columns)
-            save_report(scrape_stats, time.time() - start_total_time)
-            return None
-
-        semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-        results = []
-        total_raspagens = len(df)
-        raspagens_concluidas = 0
+    start_total_time = time.time()
+    scrape_stats = {}
+    
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            df = await get_from_api(client)
+            
+            if df is None or df.empty:
+                logger.error("Nenhum dado retornado da API")
+                return None
+            
+            required_columns = ['url', 'ean', 'brand', 'is_active']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                logger.error("Colunas ausentes no DataFrame: %s", missing_columns)
+                return None
+            
+            df_original_len = len(df)
+            df = df[df['is_active'] == True].copy()
+            logger.info("Total de URLs: %d", df_original_len)
+            logger.info("URLs ativas: %d", len(df))
+            logger.info("URLs inativas: %d", df_original_len - len(df))
+            
+            if df.empty:
+                logger.warning("Nenhuma URL ativa para processar")
+                return None
+            
+            semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+            total = len(df)
+            concluido = 0
+            total_products = 0
+            
+            logger.info("=" * 80)
+            logger.info("PROCESSANDO %d URLs", total)
+            logger.info("=" * 80)
+            
+            for idx, row in df.iterrows():
+                logger.info("\n[%d/%d] Processando próximo EAN...", concluido + 1, total)
+                result = await scrape_url(row, semaphore, scrape_stats, client)
+                
+                if result is not None:
+                    concluido += 1
+                    total_products += result
+                
+                progress_pct = (concluido / total) * 100
+                logger.info("[PROGRESSO] %.1f%% concluído (%d/%d)", progress_pct, concluido, total)
+            
+            elapsed_total = time.time() - start_total_time
+            
+            logger.info("=" * 80)
+            logger.info("SCRAPING FINALIZADO")
+            logger.info("=" * 80)
+            logger.info("Fim: %s", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+            logger.info("Tempo total: %.2fs (%.2f minutos)", elapsed_total, elapsed_total / 60)
+            logger.info("URLs processadas: %d/%d (%.1f%%)", concluido, total, (concluido / total * 100) if total > 0 else 0)
+            logger.info("Total de produtos: %d", total_products)
+            logger.info("Média: %.2f produtos/URL", total_products / concluido if concluido > 0 else 0)
+            logger.info("Tempo médio por URL: %.2fs", elapsed_total / total if total > 0 else 0)
+            
+            if scrape_stats:
+                successful = sum(1 for stat in scrape_stats.values() if stat.get("error") is None)
+                failed = len(scrape_stats) - successful
+                
+                logger.info("=" * 80)
+                logger.info("ESTATÍSTICAS DETALHADAS")
+                logger.info("=" * 80)
+                logger.info("Sucessos: %d", successful)
+                logger.info("Falhas: %d", failed)
+                
+                if failed > 0:
+                    logger.info("\nERROS ENCONTRADOS:")
+                    for ean, stat in scrape_stats.items():
+                        if stat.get("error"):
+                            logger.info("  - [EAN %s] %s", ean, stat["error"])
+            
+            logger.info("=" * 80)
+            
+            return df
         
-        for _, row in df.iterrows():
-            result = await scrape_url(row, semaphore, client, scrape_stats)
-            if result is not None:
-                raspagens_concluidas += 1
-            results.append(result)
-        
-        logger.info("Raspagens concluídas: %d de %d", raspagens_concluidas, total_raspagens)
+    except KeyboardInterrupt:
+        logger.warning("\nExecução interrompida pelo usuário")
+        return None
+    except Exception as e:
+        logger.error("Erro fatal no orquestrador: %s", e)
+        import traceback
+        traceback.print_exc()
+        return None
 
-    total_time = time.time() - start_total_time
-    save_report(scrape_stats, total_time)  # Salva o relatório
-    logger.info("Fim da Execução - %s", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
-    return df
+
+# ============================================
+# EXECUÇÃO
+# ============================================
+
+async def run_continuously():
+    """Executa o scraping a cada 1 hora, indefinidamente."""
+    while True:
+        try:
+            logger.info("=" * 80)
+            logger.info("INICIANDO NOVA EXECUÇÃO DO SCRAPING")
+            logger.info("Horário: %s", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+            logger.info("=" * 80)
+
+            await main()
+
+            # Aguarda 1 hora (3600 segundos) antes da próxima execução
+            logger.info("Aguardando 1 hora para a próxima execução...")
+            await asyncio.sleep(3600)  # 60 minutos
+
+        except KeyboardInterrupt:
+            logger.info("\nExecução interrompida pelo usuário. Encerrando...")
+            break
+        except Exception as e:
+            logger.error("Erro crítico na execução contínua: %s", e)
+            import traceback
+            traceback.print_exc()
+            logger.info("Retomando em 1 hora apesar do erro...")
+            await asyncio.sleep(3600)
+
 
 if __name__ == "__main__":
-    df = asyncio.run(main())
+    try:
+        asyncio.run(run_continuously())
+    except KeyboardInterrupt:
+        logger.info("\nPrograma encerrado pelo usuário.")
